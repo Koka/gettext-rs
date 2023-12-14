@@ -1,5 +1,6 @@
 extern crate cc;
 extern crate temp_dir;
+extern crate regex;
 
 use std::env;
 use std::ffi::OsString;
@@ -7,6 +8,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use regex::Regex;
 use temp_dir::TempDir;
 
 fn env(name: &str) -> Option<String> {
@@ -82,8 +84,33 @@ fn check_dependencies(required_programs: Vec<&str>) {
     }
 }
 
+fn check_clang_version() -> Option<u8> {
+    match env("CC") {
+        Some(cc) => { 
+            if cc != "clang" {return None;}
+        }
+        None => {return None;}
+    };
+    let output = match  Command::new("clang")
+            .arg("--version")
+            .output() {
+        Ok(s) => String::from_utf8(s.stdout).unwrap_or_else( |_| String::new() ),
+        Err(_) => { return None; }
+    };
+
+
+    let re = Regex::new(r"clang version (?<major>\d+)\.(?<minor>\d+)\.*").unwrap();
+    let Some(caps) = re.captures(&output) else { return None };
+    let major = caps.name("major").unwrap().as_str().parse::<u8>().unwrap_or(0);
+
+            // println!("cargo:warning=found cc {:?}", &caps);
+            // println!("cargo:warning=found cc {:?}", &major);
+    Some(major)
+}
+
 fn main() {
     let target = env::var("TARGET").unwrap();
+
 
     if cfg!(feature = "gettext-system") || env("GETTEXT_SYSTEM").is_some() {
         if target.contains("linux") && (target.contains("-gnu") || target.contains("-musl")) {
@@ -180,6 +207,16 @@ fn main() {
         // Avoid undefined reference to `__imp_xmlFree'
         cflags.push("-DLIBXML_STATIC");
     }
+    match check_clang_version() {
+        Some(clang_version) => {
+            if clang_version >= 16 {
+                cflags.push("-Wno-error=incompatible-function-pointer-types");
+            }
+        },
+        None => {
+            println!("cargo:warning=Clang Version not Found");
+        }
+    };
 
     let mut cmd = Command::new("tar");
     cmd.current_dir(&build_dir.join("gettext"))
